@@ -207,7 +207,7 @@ func digitaloceanKubernetesClusterRead(client *godo.Client, cluster *godo.Kubern
 	for _, p := range cluster.NodePools {
 		for _, t := range p.Tags {
 			if t == digitaloceanKubernetesDefaultNodePoolTag {
-				if err := d.Set("node_pool", flattenNodePool(p, cluster.Tags...)); err != nil {
+				if err := d.Set("node_pool", flattenNodePool(client, p, cluster.ID, cluster.Tags...)); err != nil {
 					log.Printf("[DEBUG] Error setting node pool attributes: %s %#v", err, cluster.NodePools)
 				}
 			}

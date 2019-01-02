@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/digitalocean/godo"
@@ -93,6 +94,16 @@ func nodeSchema() *schema.Schema {
 					Computed: true,
 				},
 
+				"droplet_id": {
+					Type:     schema.TypeString,
+					Computed: true,
+				},
+
+				"droplet_ip_address": {
+					Type:     schema.TypeString,
+					Computed: true,
+				},
+
 				"status": {
 					Type:     schema.TypeString,
 					Computed: true,
@@ -161,7 +172,7 @@ func resourceDigitalOceanKubernetesNodePoolRead(d *schema.ResourceData, meta int
 	d.Set("tags", flattenTags(filterTags(pool.Tags, cluster.Tags...)))
 
 	if pool.Nodes != nil {
-		d.Set("nodes", flattenNodes(pool.Nodes))
+		d.Set("nodes", flattenNodes(client, pool.Nodes, d.Get("cluster_id").(string)))
 	}
 
 	return nil
@@ -354,7 +365,7 @@ func expandNodes(nodes []interface{}) []*godo.KubernetesNode {
 	return expandedNodes
 }
 
-func flattenNodePool(pool *godo.KubernetesNodePool, parentTags ...string) []interface{} {
+func flattenNodePool(client *godo.Client, pool *godo.KubernetesNodePool, clusterID string, parentTags ...string) []interface{} {
 	rawPool := map[string]interface{}{
 		"id":         pool.ID,
 		"name":       pool.Name,
@@ -367,25 +378,48 @@ func flattenNodePool(pool *godo.KubernetesNodePool, parentTags ...string) []inte
 	}
 
 	if pool.Nodes != nil {
-		rawPool["nodes"] = flattenNodes(pool.Nodes)
+		rawPool["nodes"] = flattenNodes(client, pool.Nodes, clusterID)
 	}
 
 	return []interface{}{rawPool}
 }
 
-func flattenNodes(nodes []*godo.KubernetesNode) []interface{} {
+func getDropletForNode(client *godo.Client, nodeName string, clusterID string) (*godo.Droplet, error) {
+	opt := &godo.ListOptions{}
+	droplets, _, err := client.Droplets.ListByTag(context.Background(), "k8s:"+clusterID, opt)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range droplets {
+		if d.Name == nodeName {
+			return &d, nil
+		}
+	}
+	return nil, nil
+}
+
+func flattenNodes(client *godo.Client, nodes []*godo.KubernetesNode, clusterID string) []interface{} {
 	if nodes == nil {
 		return nil
 	}
 
 	flattenedNodes := make([]interface{}, 0)
 	for _, node := range nodes {
+		dropletId := ""
+		dropletIpAddress := ""
+		droplet, err := getDropletForNode(client, node.Name, clusterID)
+		if err == nil && droplet != nil {
+			dropletId = strconv.Itoa(droplet.ID)
+			dropletIpAddress = findIPv4AddrByType(droplet, "public")
+		}
 		rawNode := map[string]interface{}{
-			"id":         node.ID,
-			"name":       node.Name,
-			"status":     node.Status.State,
-			"created_at": node.CreatedAt.UTC().String(),
-			"updated_at": node.UpdatedAt.UTC().String(),
+			"id":                 node.ID,
+			"name":               node.Name,
+			"droplet_id":         dropletId,
+			"droplet_ip_address": dropletIpAddress,
+			"status":             node.Status.State,
+			"created_at":         node.CreatedAt.UTC().String(),
+			"updated_at":         node.UpdatedAt.UTC().String(),
 		}
 
 		flattenedNodes = append(flattenedNodes, rawNode)
